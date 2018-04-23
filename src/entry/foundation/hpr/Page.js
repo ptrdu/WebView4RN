@@ -10,10 +10,13 @@ import {
   BackHandler,
   StyleSheet,
   Text,
-  View,
-  WebView
+  View
 } from 'react-native';
-import { Navigation } from 'component';
+import {
+  Navigation,
+  ProgressBar,
+  AndroidWebView,
+} from 'component';
 import HPR from 'plugin/rn';
 import createInvoke from 'react-native-webview-invoke/native';
 import browserInvoke, { invokePlugins } from 'plugin/web';
@@ -26,19 +29,31 @@ export default class Page extends Component {
   constructor (props) {
     super(props);
     this.state = {
+      // 页面标题，onReceivedTitle 事件会保持修改
       title: '',
-      canGoBack: false
+      // 页面是否 isReady，默认已 ready
+      // onLoadStart 时设置为 false
+      // onLoadResource 第一个非当前页面请求的资源文件时设置为 true
+      // 如果页面没有 onLoadResource 非当前页面请求，则 onLoadEnd 时设置为 true
+      isReady: true,
+      // 标示当前是否是加载中的状态，onLoadStart 时会设定为 true，onLoadEnd 时会设定为 false
+      isLoading: false,
+      // 标示当前 webview 的 history 栈是否可以返回
+      canGoBack: false,
+      // 当前页面链接，onNavigationStateChange 事件会同步更新
+      currentUrl: 'about:blank'
     };
   }
 
   componentDidMount() {
     // 注入 plugin 中定义的方法
     invokePlugins.install(this);
-
+    // 监听 Android 物理返回键
     BackHandler.addEventListener('hardwareBackPress', this.onBackAndroid);
   }
 
   componentWillUnmount() {
+    // 取消监听 Android 物理返回键
     BackHandler.removeEventListener('hardwareBackPress', this.onBackAndroid);
   }
 
@@ -48,26 +63,82 @@ export default class Page extends Component {
         <Navigation
           pageKey={this.props.pageKey}
           title={this.state.title} />
-        <WebView
+        <ProgressBar status={this.state.isLoading ? 'loading' : 'complete'} />
+        <AndroidWebView
           ref={webview => this.webview = webview}
           source={{uri: this.props.startPage || 'about:blank'}}
           style={styles.content}
+          onLoadStart={this.onLoadStart}
+          onLoadResource={this.onLoadResource}
+          onLoadEnd={this.onLoadEnd}
           onMessage={this.invoke.listener}
-          onLoadStart={this.webViewLoadStart}
+          onReceivedTitle={this.onReceivedTitle}
+          onProgress={this.onProgress}
           onNavigationStateChange={this.onNavigationStateChange}
-          injectedJavaScript={`${browserInvoke};hpr.setNavigationBarTitle({title: document.title});setTimeout(function () {hpr.pop();}, 3000)`}
         />
       </View>
     );
   }
 
-  webViewLoadStart = () => {
-    this.setState({ title: 'Loading...' });
+  // 前端路由的有些情况，onLoadStart 不会调，但是会调 onLoadEnd
+  onLoadStart = () => {
+    this.setState({
+      isReady: false,
+      isLoading: true
+    });
   }
 
-  onNavigationStateChange = (navState) => {
+  onLoadEnd = () => {
+    if (!this.state.isReady) {
+      this.setState({
+        isReady: true,
+        isLoading: false
+      });
+      // call page start
+      this.onPageStart();
+    } else {
+      this.setState({
+        isLoading: false
+      });
+    }
+  }
+
+  onLoadResource = resourceUrl => {
+    const { isLoading, isReady, currentUrl } = this.state;
+
+    if (isLoading && !isReady && currentUrl != resourceUrl) {
+      this.setState({
+        isReady: true
+      });
+      // call page start
+      this.onPageStart();
+    }
+  }
+
+  // 页面开始事件，可以更早的做 JS 注入
+  onPageStart = () => {
+    // 注入 invoke
+    this.webview.injectJavaScript(browserInvoke);
+  }
+
+  onReceivedTitle = title => {
+    // 标题变化
+    this.setState({ title });
+  }
+
+  /**
+   * TODO 加载进度
+   */
+  onProgress = progress => {}
+
+  /**
+   * 更新 state
+   */
+  onNavigationStateChange = navState => {
+    const { canGoBack, url } = navState;
     this.setState({
-      canGoBack: navState.canGoBack
+      canGoBack,
+      currentUrl: url
     });
   }
 
